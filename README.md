@@ -14,81 +14,39 @@ nf-core/sarek runs multiple variant callers in parallel on the same patient samp
 | [Mutect2](https://gatk.broadinstitute.org/hc/en-us/articles/360037593851) *(optional)* | `.MU.vcf` | Somatic/germline caller |
 | [Strelka](https://github.com/Illumina/strelka) *(optional)* | `.ST.vcf` | Fast germline/somatic caller |
 
-Each caller has different strengths. These scripts merge their outputs into a single VCF per patient, using a **priority-based strategy**: when the same variant is called by multiple tools, metadata columns (QUAL, FILTER, INFO, FORMAT, genotype) from the higher-priority caller are kept. Lower-priority callers only fill in values that are missing (`NaN`) in the higher-priority result.
+Each caller has different strengths. These scripts merge their outputs into a single VCF per patient, using a **priority-based strategy**.
 
 **Default priority order:** MU > FB > HC > ST > DV
 
-Variants are matched on `CHROM + POS + REF + ALT`, so multi-allelic sites (same genomic position, different alleles) are always kept as separate rows.
-
 ---
 
-## Scripts
+## Merge strategy
 
-### `Merge_All_VCFs.py` — single patient, manual paths
+For each unique variant identified by `CHROM + POS + REF + ALT`:
 
-Use this when you want to merge VCF files for **one patient** by explicitly listing the file paths.
+1. The **complete row** (QUAL, FILTER, INFO, FORMAT, sample genotype) from the **highest-priority caller** that found the variant is used. This avoids mixing FORMAT tags from different callers, which would produce an internally inconsistent genotype column.
+2. A `CALLERS=FB,HC` tag is appended to the INFO field so you always know which callers supported each variant.
+3. Variants unique to any single caller are included — **no variants are discarded**.
+4. The `##` meta-information header lines from all callers are merged and written at the top of the output, producing a valid VCF file.
+5. Output is sorted by chromosome and genomic position.
 
-**Edit the file:**
-```python
-vcf_files = [
-    "/path/to/PATIENT_ID.FB.vcf",   # highest priority
-    "/path/to/PATIENT_ID.HC.vcf",
-    "/path/to/PATIENT_ID.DV.vcf",   # lowest priority
-]
-output_file = "/path/to/PATIENT_ID.Merged.vcf"
 ```
-
-**Run:**
-```bash
-python Merge_All_VCFs.py
+Example output row (variant found by all three callers):
+#CHROM  POS     ID  REF  ALT  QUAL  FILTER  INFO                        FORMAT  SAMPLE
+chr1    925952  .   G    A    312   PASS    DP=45;AF=0.48;CALLERS=FB,HC,DV  GT:AD  0/1:23,22
+                                            ↑ INFO from FB (highest priority)
+                                                              ↑ provenance tag
 ```
 
 ---
 
-### `Merge_all_VCF_Groups.py` — batch, whole directory
+## Files
 
-Use this when you have a directory containing VCF files for **multiple patients** and want to process them all at once.
-
-Files are grouped by patient ID — the part of the filename before the first dot:
-
-```
-PATIENT_01.FB.vcf  ──┐
-PATIENT_01.HC.vcf  ──┤──► PATIENT_01.Merged.vcf
-PATIENT_01.DV.vcf  ──┘
-
-PATIENT_02.FB.vcf  ──┐
-PATIENT_02.HC.vcf  ──┤──► PATIENT_02.Merged.vcf
-PATIENT_02.DV.vcf  ──┘
-```
-
-Groups with 2 or fewer files are skipped with a warning (a patient must have output from at least 3 callers).
-
-**Run:**
-```bash
-python Merge_all_VCF_Groups.py /data/sarek_output /data/merged_vcfs
-```
-
-| Argument | Description |
-|----------|-------------|
-| `directory` | Directory containing the input `.vcf` files |
-| `output_dir` | Directory where merged VCF files will be written (created if it does not exist) |
-
----
-
-## How the merge works
-
-```
-For each patient group:
-  1. Sort files by caller priority (MU > FB > HC > ST > DV)
-  2. Start with the highest-priority caller as the base DataFrame
-  3. For each subsequent caller:
-       - Outer join on [CHROM, POS, REF, ALT]
-         → variants unique to either caller are included (no variants are lost)
-       - For shared columns (QUAL, FILTER, INFO, FORMAT, genotype …):
-           keep the higher-priority value; fill NaN from the lower-priority value
-  4. Drop exact duplicates on [CHROM, POS, ID, REF, ALT]
-  5. Write result as tab-separated file
-```
+| File | Purpose |
+|------|---------|
+| `vcf_utils.py` | Core merge logic shared by both scripts |
+| `Merge_All_VCFs.py` | Merge VCF files for one patient (manually specify paths) |
+| `Merge_all_VCF_Groups.py` | Batch merge for all patients in a directory |
 
 ---
 
@@ -98,15 +56,84 @@ For each patient group:
 pip install -r requirements.txt
 ```
 
-Requires Python 3.8+.
+Requires Python 3.10+.
+
+---
+
+## Usage
+
+### Single patient — `Merge_All_VCFs.py`
+
+Edit the file paths at the bottom of `Merge_All_VCFs.py`:
+
+```python
+vcf_files = [
+    "/path/to/PATIENT_ID.FB.vcf",
+    "/path/to/PATIENT_ID.HC.vcf",
+    "/path/to/PATIENT_ID.DV.vcf",
+]
+output_file = "/path/to/PATIENT_ID.Merged.vcf"
+```
+
+Then run:
+
+```bash
+python Merge_All_VCFs.py
+```
+
+---
+
+### Batch — `Merge_all_VCF_Groups.py`
+
+Place all patient VCF files in one directory with the naming convention `PATIENT_ID.CALLER.vcf`:
+
+```
+/data/sarek_output/
+├── PATIENT_01.FB.vcf
+├── PATIENT_01.HC.vcf
+├── PATIENT_01.DV.vcf
+├── PATIENT_02.FB.vcf
+├── PATIENT_02.HC.vcf
+└── PATIENT_02.DV.vcf
+```
+
+Run:
+
+```bash
+python Merge_all_VCF_Groups.py /data/sarek_output /data/merged_vcfs
+```
+
+Output:
+
+```
+/data/merged_vcfs/
+├── PATIENT_01.Merged.vcf
+└── PATIENT_02.Merged.vcf
+```
+
+Groups with 2 or fewer VCF files are skipped with a warning (a patient must have output from at least 3 callers).
 
 ---
 
 ## Known limitations
 
-- **VCF meta-information lines (`##`) are not written to the output.** The output file contains only the column header line (`#CHROM POS ...`) and data rows. If your downstream tools require a fully compliant VCF header, add the `##` lines manually or use a tool like `bcftools reheader`.
-- Caller-specific FORMAT fields (e.g. DeepVariant's `VAF` tag vs HaplotypeCaller's `AD` tag) may differ. The merge preserves the FORMAT string and sample column from the highest-priority caller that called the variant. Fields unique to lower-priority callers are not carried over.
-- This tool does not perform genotype-level reconciliation. For clinical-grade ensemble calling, consider [GATK CombineGVCFs](https://gatk.broadinstitute.org/hc/en-us/articles/360037053272) or [GLnexus](https://github.com/dnanexus-rnd/GLnexus).
+### Indel representation
+Different callers may represent the same indel differently (e.g. different left-alignment or REF/ALT padding). The same true indel can appear as two separate rows if callers disagree on representation. To prevent this, normalize your input VCFs with `bcftools norm` before running the merge:
+
+```bash
+bcftools norm -f reference.fasta -m -any patient.FB.vcf -o patient.FB.norm.vcf
+bcftools norm -f reference.fasta -m -any patient.HC.vcf -o patient.HC.norm.vcf
+bcftools norm -f reference.fasta -m -any patient.DV.vcf -o patient.DV.norm.vcf
+```
+
+### Caller-specific FORMAT fields
+FORMAT fields differ between callers (e.g. DeepVariant uses `VAF`; HaplotypeCaller uses `AD`, `F1R2`, `F2R1`). The merge keeps the FORMAT and sample column from the highest-priority caller that called the variant. Fields unique to lower-priority callers are not carried over into the merged row, but are present in the `CALLERS` tag so you know which other callers also found the variant.
+
+### Clinical-grade ensemble calling
+For clinical reporting, consider dedicated ensemble tools such as:
+- [`bcftools merge`](https://samtools.github.io/bcftools/bcftools.html#merge) — standard VCF merge with full header reconciliation
+- [GLnexus](https://github.com/dnanexus-rnd/GLnexus) — joint genotyping across callers
+- [GATK CombineVariants](https://gatk.broadinstitute.org/hc/en-us/articles/360037053272)
 
 ---
 
