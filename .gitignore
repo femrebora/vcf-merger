@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.vcf
+*.vcf.gz
+*.tbi
+*.bai
+.DS_Store
