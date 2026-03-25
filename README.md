@@ -117,8 +117,21 @@ Groups with 2 or fewer VCF files are skipped with a warning (a patient must have
 
 ## Known limitations
 
-### Indel representation
-Different callers may represent the same indel differently (e.g. different left-alignment or REF/ALT padding). The same true indel can appear as two separate rows if callers disagree on representation. To prevent this, normalize your input VCFs with `bcftools norm` before running the merge:
+### Summary
+
+| Limitation | Severity | Workaround |
+|------------|----------|------------|
+| Indel representation differences | High | Run `bcftools norm` on each input VCF before merging |
+| CALLERS concordance signal is not equal across callers | Medium | Treat HC-only calls separately (see below) |
+| QUAL scores are not comparable between callers | Medium | Use `CALLERS` count and `FILTER=PASS` as quality proxy instead |
+| Caller-specific FORMAT fields not carried across callers | Low | FORMAT is always internally consistent per row |
+| Not tested on all possible VCF edge cases | Low | Validate output on one patient before batch processing |
+
+---
+
+### 1. Indel representation
+
+Different callers may represent the same indel differently (e.g. different left-alignment or REF/ALT padding). The same true indel can appear as two separate rows if callers disagree on representation. Normalize your input VCFs with `bcftools norm` before running the merge:
 
 ```bash
 bcftools norm -f reference.fasta -m -any patient.FB.vcf -o patient.FB.norm.vcf
@@ -126,11 +139,41 @@ bcftools norm -f reference.fasta -m -any patient.HC.vcf -o patient.HC.norm.vcf
 bcftools norm -f reference.fasta -m -any patient.DV.vcf -o patient.DV.norm.vcf
 ```
 
-### Caller-specific FORMAT fields
-FORMAT fields differ between callers (e.g. DeepVariant uses `VAF`; HaplotypeCaller uses `AD`, `F1R2`, `F2R1`). The merge keeps the FORMAT and sample column from the highest-priority caller that called the variant. Fields unique to lower-priority callers are not carried over into the merged row, but are present in the `CALLERS` tag so you know which other callers also found the variant.
+---
 
-### Clinical-grade ensemble calling
-For clinical reporting, consider dedicated ensemble tools such as:
+### 2. CALLERS concordance signal is not equal across callers
+
+The `CALLERS=` tag counts how many independent callers found a variant. However, not all callers are run in the same mode:
+
+- **FreeBayes** and **DeepVariant** are always run independently per sample
+- **HaplotypeCaller** may be run in joint genotyping mode, where it sees all samples in the cohort simultaneously and can rescue variants with weak per-sample evidence using cohort-level statistics
+
+This means:
+
+| CALLERS value | Interpretation |
+|---------------|---------------|
+| `CALLERS=FB,HC,DV` | All three agree — high confidence |
+| `CALLERS=FB,DV` | Two independent callers agree — moderate confidence |
+| `CALLERS=HC` only | May be a real variant rescued by joint genotyping — do not treat as low confidence |
+| `CALLERS=FB` or `CALLERS=DV` only | Single independent caller — treat with caution, requires validation |
+
+---
+
+### 3. QUAL scores are not comparable between callers
+
+QUAL scores from FreeBayes, HaplotypeCaller, and DeepVariant are produced by different statistical models and are not on the same scale. The merged QUAL column reflects whichever caller had the highest priority for that variant. Do not use QUAL to compare confidence across rows from different callers. Use the `CALLERS` concordance count and `FILTER=PASS` status as the primary quality signal instead.
+
+---
+
+### 4. Caller-specific FORMAT fields
+
+FORMAT fields differ between callers (e.g. DeepVariant uses `VAF`; HaplotypeCaller uses `AD`, `F1R2`, `F2R1`). The merge keeps the complete FORMAT and sample column from the highest-priority caller that found the variant. Fields unique to lower-priority callers are not carried over, but the `CALLERS` tag records which other callers also found the variant.
+
+---
+
+### 5. Alternative tools for stricter ensemble calling
+
+For stricter multi-caller merging consider:
 - [`bcftools merge`](https://samtools.github.io/bcftools/bcftools.html#merge) — standard VCF merge with full header reconciliation
 - [GLnexus](https://github.com/dnanexus-rnd/GLnexus) — joint genotyping across callers
 - [GATK CombineVariants](https://gatk.broadinstitute.org/hc/en-us/articles/360037053272)
