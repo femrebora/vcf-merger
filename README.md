@@ -179,7 +179,3 @@ For stricter multi-caller merging consider:
 - [GATK CombineVariants](https://gatk.broadinstitute.org/hc/en-us/articles/360037053272)
 
 ---
-
-## License
-
-MIT
