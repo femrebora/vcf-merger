@@ -1,0 +1,7 @@
+{
+  "sample_id": "SYNTHETIC_SAMPLE_001",
+  "mean_coverage": 42.5,
+  "pct_bases_ge_20x": 0.97,
+  "contamination_estimate": 0.001,
+  "note": "synthetic QC only"
+}

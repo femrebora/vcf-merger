@@ -1,0 +1,10 @@
+##fileformat=VCFv4.2
+##source=phelix-vault-synthetic
+##reference=GRCh38
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Total Depth">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read Depth">
+##contig=<ID=chr1,length=248956422>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SYNTHETIC_SAMPLE_001
+chr1	100000	.	A	G	100	PASS	DP=30	GT:DP	0/1:30
+chr1	200000	.	C	T	80	PASS	DP=20	GT:DP	0/0:20

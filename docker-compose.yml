@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: phelix
+      POSTGRES_PASSWORD: phelix
+      POSTGRES_DB: phelix_vault
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phelix -d phelix_vault"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb -p local/phelix-vault || true
+      "
+
+  vault-api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: development
+      DEBUG: "false"
+      DATABASE_URL: postgresql+psycopg://phelix:phelix@postgres:5432/phelix_vault
+      JWT_SECRET: CHANGE_ME_DEV_ONLY_NOT_FOR_PRODUCTION
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_ROOT: /data/objects
+      STORAGE_RESIDENCY: TR
+      KMS_PROVIDER: development
+      DEVELOPMENT_KEK: dev-only-kek-not-for-production
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+    ports:
+      - "8000:8000"
+    volumes:
+      - vaultobjects:/data/objects
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+  miniodata:
+  vaultobjects:

@@ -1,9 +1,0 @@
-##fileformat=VCFv4.2
-##reference=mini_ref.fa
-##assembly=GRCh38
-##source=DeepVariant v1.5.0
-##contig=<ID=chr1,length=2000>
-##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
-##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Depth">
-#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
-chr1	100	.	T	A	5	.	.	GT:DP	./.:10

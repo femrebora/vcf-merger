@@ -1,7 +1,0 @@
-##fileformat=VCFv4.2
-##assembly=GRCh38
-##GATKCommandLine.HaplotypeCaller=<ID=HaplotypeCaller,Version=4.4.0.0>
-##contig=<ID=chr1,length=999>
-##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
-#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
-chr1	100	.	T	A	10	PASS	.	GT	0/1
