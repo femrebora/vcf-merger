@@ -1,7 +1,21 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+.venv/
+venv/
+
+# Ignore ad-hoc VCF outputs, but keep test fixtures
 *.vcf
 *.vcf.gz
 *.tbi
 *.bai
-.DS_Store
+*.bcf
+*.csi
+!tests/fixtures/**

@@ -1,0 +1,13 @@
+##fileformat=VCFv4.2
+##reference=mini_ref.fa
+##assembly=GRCh38
+##source=strelka 2.9.10
+##contig=<ID=chr1,length=2000>
+##INFO=<ID=SomaticEVS,Number=1,Type=Float,Description="Somatic EVS">
+##INFO=<ID=QSS_NT,Number=1,Type=Integer,Description="QSS_NT">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="DP">
+##FILTER=<ID=PASS,Description="All filters passed">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TUMOR	NORMAL
+chr1	100	.	T	A	.	PASS	SomaticEVS=15;QSS_NT=40	GT:DP	0/1:55	0/0:40
+chr1	180	.	G	T	.	PASS	SomaticEVS=11;QSS_NT=30	GT:DP	0/1:48	0/0:42

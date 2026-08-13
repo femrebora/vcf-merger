@@ -1,0 +1,7 @@
+##fileformat=VCFv4.2
+##assembly=GRCh38
+##contig=<ID=chr1,length=2000>
+##INFO=<ID=XX,Number=1,Type=Integer,Description="A">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chr1	100	.	T	A	10	PASS	XX=1	GT	0/1

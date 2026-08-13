@@ -1,181 +1,203 @@
 # vcf-merger
 
-Python scripts for merging per-caller VCF files produced by the [nf-core/sarek](https://nf-co.re/sarek) germline variant calling pipeline.
+Standards-aware **VCF normalization, evidence aggregation, and harmonization** for multi-caller variant callsets.
 
-## Background
+This is a **technical** ensemble / harmonization utility. It does **not** perform ACMG/AMP pathogenicity classification, AMP/ASCO/CAP somatic tiering, or any clinical interpretation. Caller concordance, QUAL, FILTER, and allele fraction are technical signals only—not evidence of clinical significance.
 
-nf-core/sarek runs multiple variant callers in parallel on the same patient sample:
+## What it does
 
-| Caller | File suffix | Description |
-|--------|-------------|-------------|
-| [FreeBayes](https://github.com/freebayes/freebayes) | `.FB.vcf` | Bayesian haplotype-based caller |
-| [GATK HaplotypeCaller](https://gatk.broadinstitute.org/hc/en-us/articles/360037225632) | `.HC.vcf` | Graph-based local assembly caller |
-| [DeepVariant](https://github.com/google/deepvariant) | `.DV.vcf` | Deep-learning-based caller |
-| [Mutect2](https://gatk.broadinstitute.org/hc/en-us/articles/360037593851) *(optional)* | `.MU.vcf` | Somatic/germline caller |
-| [Strelka](https://github.com/Illumina/strelka) *(optional)* | `.ST.vcf` | Fast germline/somatic caller |
+- Validates input compatibility (assembly, contig dictionaries, samples, VCF vs gVCF)
+- Normalizes alleles with reference-aware `bcftools norm` (left-align, trim, multiallelic split)
+- Detects callers via CLI override → VCF header → filename fallback
+- Aggregates **per-caller evidence** for each canonical small variant (does not discard lower-priority callers)
+- Emits a compact harmonized VCF plus evidence and provenance sidecars
+- Supports germline and somatic analysis modes with explicit semantics
 
-Each caller has different strengths. These scripts merge their outputs into a single VCF per patient, using a **priority-based strategy**.
+## What it does not do
 
-**Default priority order:** MU > FB > HC > ST > DV
+- ACMG/AMP Pathogenic / Likely Pathogenic / VUS / Likely Benign / Benign classification
+- Treat caller count or concordance as pathogenicity evidence
+- Silently merge GRCh37 and GRCh38 (or incompatible contig dictionaries)
+- Ensemble-merge GATK HaplotypeCaller **gVCFs** (rejected by default)
+- Merge structural variants / CNVs with the small-variant algorithm
+- Claim clinical validation
 
----
+## Supported callers (initial)
 
-## Merge strategy
+| Caller | Notes |
+|--------|--------|
+| GATK HaplotypeCaller | Germline VCF (not gVCF) |
+| FreeBayes | Germline |
+| DeepVariant | Germline |
+| GATK Mutect2 | Somatic-oriented evidence |
+| Strelka / Strelka2 | Germline or somatic evidence preserved natively |
 
-For each unique variant identified by `CHROM + POS + REF + ALT`:
+Additional callers can be added via adapter modules without changing core merge logic.
 
-1. The **complete row** (QUAL, FILTER, INFO, FORMAT, sample genotype) from the **highest-priority caller** that found the variant is used. This avoids mixing FORMAT tags from different callers, which would produce an internally inconsistent genotype column.
-2. A `CALLERS=FB,HC` tag is appended to the INFO field so you always know which callers supported each variant.
-3. Variants unique to any single caller are included — **no variants are discarded**.
-4. The `##` meta-information header lines from all callers are merged and written at the top of the output, producing a valid VCF file.
-5. Output is sorted by chromosome and genomic position.
+## Supported file types
 
-```
-Example output row (variant found by all three callers):
-#CHROM  POS     ID  REF  ALT  QUAL  FILTER  INFO                        FORMAT  SAMPLE
-chr1    925952  .   G    A    312   PASS    DP=45;AF=0.48;CALLERS=FB,HC,DV  GT:AD  0/1:23,22
-                                            ↑ INFO from FB (highest priority)
-                                                              ↑ provenance tag
-```
-
----
-
-## Files
-
-| File | Purpose |
+| Type | Support |
 |------|---------|
-| `vcf_utils.py` | Core merge logic shared by both scripts |
-| `Merge_All_VCFs.py` | Merge VCF files for one patient (manually specify paths) |
-| `Merge_all_VCF_Groups.py` | Batch merge for all patients in a directory |
+| `.vcf` | Yes |
+| `.vcf.gz` (+ tabix/CSI) | Yes |
+| `.bcf` | Read where HTSlib/pysam supports it |
+| `.g.vcf` / `.g.vcf.gz` | Detected and **rejected** for ensemble merge by default |
 
----
+## Install
 
-## Installation
+Requires Python 3.10+ and **bcftools** on `PATH` for normalization.
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
+# optional
+pip install -e ".[dev]"
 ```
 
-Requires Python 3.10+.
+External tools: `bcftools`, `tabix` / `bgzip` (HTSlib).
 
----
+## CLI
 
-## Usage
+```bash
+vcf-merger inspect sample.HC.vcf.gz
 
-### Single patient — `Merge_All_VCFs.py`
+vcf-merger normalize \
+  --reference GRCh38.fa \
+  --input sample.HC.vcf.gz \
+  --output sample.HC.norm.vcf.gz
 
-Edit the file paths at the bottom of `Merge_All_VCFs.py`:
+vcf-merger merge \
+  --mode germline \
+  --reference GRCh38.fa \
+  --input sample.FB.vcf.gz \
+  --input sample.HC.vcf.gz \
+  --input sample.DV.vcf.gz \
+  --strategy union \
+  --output sample.harmonized.vcf.gz
+```
+
+Somatic example:
+
+```bash
+vcf-merger merge \
+  --mode somatic \
+  --reference GRCh38.fa \
+  --tumor-sample TUMOR \
+  --normal-sample NORMAL \
+  --input mutect2.vcf.gz \
+  --input strelka.vcf.gz \
+  --output sample.somatic.harmonized.vcf.gz
+```
+
+### Ensemble strategies
+
+| Strategy | Behavior |
+|----------|----------|
+| `union` (default) | Keep alleles seen by ≥1 caller |
+| `pass-union` | Keep alleles with ≥1 PASS caller |
+| `consensus` | Require `--consensus-n` distinct callers (technical consensus only) |
+| `caller-specific` | Include/exclude via `--include-caller` / `--exclude-caller` |
+
+These strategies describe **technical** ensemble membership. They are not clinical filters.
+
+## Python API
 
 ```python
-vcf_files = [
-    "/path/to/PATIENT_ID.FB.vcf",
-    "/path/to/PATIENT_ID.HC.vcf",
-    "/path/to/PATIENT_ID.DV.vcf",
-]
-output_file = "/path/to/PATIENT_ID.Merged.vcf"
+from vcf_merger import harmonize_vcfs, inspect_vcf, normalize_vcf
+
+normalize_vcf("sample.HC.vcf.gz", "sample.HC.norm.vcf.gz", reference="GRCh38.fa")
+meta = inspect_vcf("sample.HC.norm.vcf.gz")
+result = harmonize_vcfs(
+    ["sample.FB.vcf.gz", "sample.HC.vcf.gz", "sample.DV.vcf.gz"],
+    "sample.harmonized.vcf.gz",
+    reference="GRCh38.fa",
+    mode="germline",
+    strategy="union",
+)
 ```
 
-Then run:
+## Data model
+
+Variants and evidence are separate:
+
+```text
+CanonicalVariant (assembly, contig, normalized POS/REF/ALT)
+  └── CallerEvidence[]   # never discarded merely for caller priority
+        └── SampleEvidence (GT, ploidy-tolerant, DP, AD, AF, GQ, raw FORMAT)
+```
+
+There is **no** fixed scientific priority list such as MU > FB > HC > ST > DV.
+
+## Output
+
+For `--output sample.harmonized.vcf.gz` the tool writes:
+
+1. `sample.harmonized.vcf.gz` (+ `.tbi` / `.csi` when possible)
+2. `sample.harmonized.evidence.jsonl` — full per-caller evidence for reconstruction
+3. `sample.harmonized.provenance.json` — tool version, inputs, checksums, parameters
+
+### Harmonized VCF INFO (`VM_*`)
+
+| Field | Meaning |
+|-------|---------|
+| `VM_CALLERS` | Callers that detected the allele |
+| `VM_PASS_CALLERS` | Callers with FILTER=PASS |
+| `VM_CALLER_COUNT` | Distinct detecting callers |
+| `VM_PASS_CALLER_COUNT` | Distinct PASS callers |
+| `VM_GT_CONFLICT` | Flag when genotypes disagree |
+| `VM_ORIG` | One original unnormalized representation |
+
+Absence from another caller is **not** interpreted as homozygous reference unless reference-confidence / callability data supports that conclusion (gVCF merging is out of scope).
+
+## Germline vs somatic
+
+- `--mode germline` — genotype comparison, allele balance, depth, GQ, phasing-friendly fields; no ACMG classification.
+- `--mode somatic` — tumor/normal (or tumor-only) roles via `--tumor-sample` / `--normal-sample`; preserves Mutect2/Strelka metrics natively rather than forcing a universal QUAL.
+
+Do not mix germline and somatic semantics in one run.
+
+## Normalization
+
+Normalization is a first-class stage (default on for `merge`). It uses `bcftools norm` for REF checks, trimming, left alignment, and multiallelic decomposition. Original representations are retained in evidence (`VM_ORIG` / sidecar).
+
+**Tradeoff:** pysam is used for typed VCF I/O; `bcftools norm` is preferred over hand-rolled allele edits so Number=A/R/G fields are not corrupted.
+
+## gVCF limitations
+
+HaplotypeCaller gVCFs (`<NON_REF>`, `END` reference blocks) are intermediate reference-confidence files. Direct ensemble merging is rejected with an actionable error. Genotype gVCFs first, then merge variant-level VCFs. Extension hooks exist for future explicit gVCF support; gVCFs are never silently flattened.
+
+## WES / WGS suitability
+
+The harmonizer uses a multi-way merge over per-caller streams (contig-dictionary ordered when indexed). It does **not** load all callers into a single pandas DataFrame. Practical for WES/WGS multi-caller single-sample (or matched tumor/normal) callsets. Sort/index inputs when possible.
+
+## Structural variants / CNVs
+
+First-class support: SNVs and small indels (MNVs after normalization policy). Symbolic alleles (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`, BNDs) are detected and kept out of the small-variant VCF path (recorded as unsupported in the evidence sidecar). SV/CNV merging is a future extension.
+
+## Mitochondrial / ploidy
+
+Genotype shape is taken from the source VCF (haploid, diploid, etc.). Contig order follows the reference/VCF dictionary (not a hard-coded 1–22,X,Y,MT-only list).
+
+## Testing
 
 ```bash
-python Merge_All_VCFs.py
+pip install -e ".[dev]"
+pytest
 ```
 
----
+Integration tests require `bcftools`. Performance tests are marked `@pytest.mark.performance`.
 
-### Batch — `Merge_all_VCF_Groups.py`
+## Legacy scripts
 
-Place all patient VCF files in one directory with the naming convention `PATIENT_ID.CALLER.vcf`:
+`Merge_All_VCFs.py` and `Merge_all_VCF_Groups.py` remain as thin deprecated wrappers around the new API. See [docs/migration.md](docs/migration.md).
 
-```
-/data/sarek_output/
-├── PATIENT_01.FB.vcf
-├── PATIENT_01.HC.vcf
-├── PATIENT_01.DV.vcf
-├── PATIENT_02.FB.vcf
-├── PATIENT_02.HC.vcf
-└── PATIENT_02.DV.vcf
-```
+## Parser choice
 
-Run:
+**pysam (`VariantFile`)** is the primary parser/writer (HTSlib-backed typing, samples, streaming, bgzip). Pandas is not used for VCF semantics.
 
-```bash
-python Merge_all_VCF_Groups.py /data/sarek_output /data/merged_vcfs
-```
+## Limitations
 
-Output:
-
-```
-/data/merged_vcfs/
-├── PATIENT_01.Merged.vcf
-└── PATIENT_02.Merged.vcf
-```
-
-Groups with 2 or fewer VCF files are skipped with a warning (a patient must have output from at least 3 callers).
-
----
-
-## Known limitations
-
-### Summary
-
-| Limitation | Severity | Workaround |
-|------------|----------|------------|
-| Indel representation differences | High | Run `bcftools norm` on each input VCF before merging |
-| CALLERS concordance signal is not equal across callers | Medium | Treat HC-only calls separately (see below) |
-| QUAL scores are not comparable between callers | Medium | Use `CALLERS` count and `FILTER=PASS` as quality proxy instead |
-| Caller-specific FORMAT fields not carried across callers | Low | FORMAT is always internally consistent per row |
-| Not tested on all possible VCF edge cases | Low | Validate output on one patient before batch processing |
-
----
-
-### 1. Indel representation
-
-Different callers may represent the same indel differently (e.g. different left-alignment or REF/ALT padding). The same true indel can appear as two separate rows if callers disagree on representation. Normalize your input VCFs with `bcftools norm` before running the merge:
-
-```bash
-bcftools norm -f reference.fasta -m -any patient.FB.vcf -o patient.FB.norm.vcf
-bcftools norm -f reference.fasta -m -any patient.HC.vcf -o patient.HC.norm.vcf
-bcftools norm -f reference.fasta -m -any patient.DV.vcf -o patient.DV.norm.vcf
-```
-
----
-
-### 2. CALLERS concordance signal is not equal across callers
-
-The `CALLERS=` tag counts how many independent callers found a variant. However, not all callers are run in the same mode:
-
-- **FreeBayes** and **DeepVariant** are always run independently per sample
-- **HaplotypeCaller** may be run in joint genotyping mode, where it sees all samples in the cohort simultaneously and can rescue variants with weak per-sample evidence using cohort-level statistics
-
-This means:
-
-| CALLERS value | Interpretation |
-|---------------|---------------|
-| `CALLERS=FB,HC,DV` | All three agree — high confidence |
-| `CALLERS=FB,DV` | Two independent callers agree — moderate confidence |
-| `CALLERS=HC` only | May be a real variant rescued by joint genotyping — do not treat as low confidence |
-| `CALLERS=FB` or `CALLERS=DV` only | Single independent caller — treat with caution, requires validation |
-
----
-
-### 3. QUAL scores are not comparable between callers
-
-QUAL scores from FreeBayes, HaplotypeCaller, and DeepVariant are produced by different statistical models and are not on the same scale. The merged QUAL column reflects whichever caller had the highest priority for that variant. Do not use QUAL to compare confidence across rows from different callers. Use the `CALLERS` concordance count and `FILTER=PASS` status as the primary quality signal instead.
-
----
-
-### 4. Caller-specific FORMAT fields
-
-FORMAT fields differ between callers (e.g. DeepVariant uses `VAF`; HaplotypeCaller uses `AD`, `F1R2`, `F2R1`). The merge keeps the complete FORMAT and sample column from the highest-priority caller that found the variant. Fields unique to lower-priority callers are not carried over, but the `CALLERS` tag records which other callers also found the variant.
-
----
-
-### 5. Alternative tools for stricter ensemble calling
-
-For stricter multi-caller merging consider:
-- [`bcftools merge`](https://samtools.github.io/bcftools/bcftools.html#merge) — standard VCF merge with full header reconciliation
-- [GLnexus](https://github.com/dnanexus-rnd/GLnexus) — joint genotyping across callers
-- [GATK CombineVariants](https://gatk.broadinstitute.org/hc/en-us/articles/360037053272)
-
----
+- Small-variant focus only
+- gVCF ensemble merging not supported
+- Representative genotype is reconciled explicitly; conflicts set `VM_GT_CONFLICT`
+- QUAL scores are not comparable across callers and are not unified into one scale
+- No clinical validation claim is made for this software
