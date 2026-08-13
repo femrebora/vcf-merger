@@ -7,7 +7,11 @@
 ##INFO=<ID=QSS_NT,Number=1,Type=Integer,Description="QSS_NT">
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 ##FORMAT=<ID=DP,Number=1,Type=Integer,Description="DP">
+##FORMAT=<ID=AU,Number=2,Type=Integer,Description="A tier counts">
+##FORMAT=<ID=CU,Number=2,Type=Integer,Description="C tier counts">
+##FORMAT=<ID=GU,Number=2,Type=Integer,Description="G tier counts">
+##FORMAT=<ID=TU,Number=2,Type=Integer,Description="T tier counts">
 ##FILTER=<ID=PASS,Description="All filters passed">
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TUMOR	NORMAL
-chr1	100	.	T	A	.	PASS	SomaticEVS=15;QSS_NT=40	GT:DP	0/1:55	0/0:40
-chr1	180	.	G	T	.	PASS	SomaticEVS=11;QSS_NT=30	GT:DP	0/1:48	0/0:42
+chr1	100	.	T	A	.	PASS	SomaticEVS=15;QSS_NT=40	GT:DP:AU:CU:GU:TU	0/1:55:10,12:0,0:0,0:40,42	0/0:40:0,0:0,0:0,0:40,40
+chr1	180	.	G	T	.	PASS	SomaticEVS=11;QSS_NT=30	GT:DP:AU:CU:GU:TU	0/1:48:0,0:0,0:36,38:12,14	0/0:42:0,0:0,0:42,42:0,0

@@ -48,6 +48,8 @@ class CallerAdapter(ABC):
         source_file: str,
         caller_version: Optional[str],
         detection_source: DetectionSource,
+        tumor_sample: Optional[str] = None,
+        normal_sample: Optional[str] = None,
     ) -> CallerEvidence:
         alt = (record.alts or (".",))[alt_index]
         filt = list(record.filter.keys()) if record.filter else []
@@ -59,9 +61,11 @@ class CallerAdapter(ABC):
             passed = filt == ["PASS"] or (len(filt) == 1 and filt[0] == "PASS")
 
         samples: list[SampleEvidence] = []
+        sample_fmts: dict[str, dict[str, Any]] = {}
         for sample in record.samples:
             gt, phased, ploidy = genotype_string(record, sample)
             fmt = sample_format_dict(record, sample)
+            sample_fmts[sample] = fmt
             depth = _as_int(fmt.get("DP"))
             ref_depth, alt_depth, af = self._depths_and_af(fmt, alt_index)
             gq = _as_float(fmt.get("GQ"))
@@ -96,17 +100,35 @@ class CallerAdapter(ABC):
             original_alt=str(alt),
             original_record_identifier=f"{record.contig}:{record.pos}:{record.ref}>{alt}",
             detection_source=detection_source,
-            tumor_allele_fraction=self.tumor_af(record, alt_index),
-            normal_allele_fraction=self.normal_af(record, alt_index),
+            tumor_allele_fraction=self.tumor_af(
+                record, alt_index, sample_fmts=sample_fmts, tumor_sample=tumor_sample
+            ),
+            normal_allele_fraction=self.normal_af(
+                record, alt_index, sample_fmts=sample_fmts, normal_sample=normal_sample
+            ),
         )
 
     def caller_metrics(self, record: pysam.VariantRecord, alt_index: int) -> dict[str, Any]:
         return {}
 
-    def tumor_af(self, record: pysam.VariantRecord, alt_index: int) -> Optional[float]:
+    def tumor_af(
+        self,
+        record: pysam.VariantRecord,
+        alt_index: int,
+        *,
+        sample_fmts: Optional[dict[str, dict[str, Any]]] = None,
+        tumor_sample: Optional[str] = None,
+    ) -> Optional[float]:
         return None
 
-    def normal_af(self, record: pysam.VariantRecord, alt_index: int) -> Optional[float]:
+    def normal_af(
+        self,
+        record: pysam.VariantRecord,
+        alt_index: int,
+        *,
+        sample_fmts: Optional[dict[str, dict[str, Any]]] = None,
+        normal_sample: Optional[str] = None,
+    ) -> Optional[float]:
         return None
 
     def _depths_and_af(

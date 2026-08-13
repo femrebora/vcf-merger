@@ -58,7 +58,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=[m.value for m in AnalysisMode],
         default=AnalysisMode.GERMLINE.value,
     )
-    p_merge.add_argument("--reference", "-r", default=None, help="Reference FASTA (required unless --no-normalize)")
+    p_merge.add_argument(
+        "--reference",
+        "-r",
+        default=None,
+        help="Reference FASTA (required unless --no-normalize)",
+    )
     p_merge.add_argument(
         "--input",
         "-i",
@@ -98,8 +103,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Exclude these callers (repeatable)",
     )
     p_merge.add_argument("--output", "-o", required=True, help="Output harmonized VCF/VCF.GZ")
+    p_merge.add_argument(
+        "--evidence-output",
+        default=None,
+        help="Evidence JSONL path (default: <output-stem>.evidence.jsonl)",
+    )
+    p_merge.add_argument(
+        "--provenance-output",
+        default=None,
+        help="Provenance JSON path (default: <output-stem>.provenance.json)",
+    )
     p_merge.add_argument("--tumor-sample", default=None, help="Tumor sample name (somatic)")
     p_merge.add_argument("--normal-sample", default=None, help="Normal sample name (somatic)")
+    p_merge.add_argument(
+        "--tumor-only",
+        action="store_true",
+        help="Somatic tumor-only mode (no matched normal)",
+    )
     p_merge.add_argument(
         "--no-normalize",
         action="store_true",
@@ -141,6 +161,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
 
         if args.command == "merge":
+            if args.mode == AnalysisMode.SOMATIC.value and args.tumor_only and args.normal_sample:
+                parser.error("Cannot combine --tumor-only with --normal-sample")
             result = harmonize_vcfs(
                 args.inputs,
                 args.output,
@@ -154,8 +176,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 callers=args.callers,
                 tumor_sample=args.tumor_sample,
                 normal_sample=args.normal_sample,
+                tumor_only=args.tumor_only,
                 allow_gvcf=args.allow_gvcf,
-                command_line=["vcf-merger", *sys.argv[1:]],
+                command_line=["vcf-merger", *(argv if argv is not None else sys.argv[1:])],
+                evidence_path=args.evidence_output,
+                provenance_path=args.provenance_output,
             )
             print(
                 f"Wrote {result['paths']['vcf']} "
