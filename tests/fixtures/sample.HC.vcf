@@ -1,0 +1,23 @@
+##fileformat=VCFv4.2
+##reference=mini_ref.fa
+##assembly=GRCh38
+##GATKCommandLine.HaplotypeCaller=<ID=HaplotypeCaller,Version=4.4.0.0>
+##contig=<ID=chr1,length=2000>
+##contig=<ID=chrX,length=400>
+##contig=<ID=chrY,length=400>
+##contig=<ID=chrM,length=200>
+##contig=<ID=chrUn_test,length=200>
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Depth">
+##INFO=<ID=MQ,Number=1,Type=Float,Description="MQ">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Depth">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="AD">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="GQ">
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description="PL">
+##FILTER=<ID=PASS,Description="All filters passed">
+##FILTER=<ID=LowQual,Description="Low quality">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chr1	100	.	T	A	200	PASS	DP=50;MQ=60	GT:DP:AD:GQ:PL	0/1:50:25,25:99:200,0,200
+chr1	200	.	T	TA	150	PASS	DP=35;MQ=60	GT:DP:AD:GQ:PL	0/1:35:18,17:90:150,0,150
+chr1	400	.	A	G	120	PASS	DP=40;MQ=58	GT:DP:AD:GQ:PL	0/1:40:20,20:95:120,0,120
+chrY	8	.	T	C	60	PASS	DP=12;MQ=40	GT:DP:AD:GQ:PL	1:12:0,12:60:60,0

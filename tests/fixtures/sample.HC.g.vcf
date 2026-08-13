@@ -1,0 +1,16 @@
+##fileformat=VCFv4.2
+##reference=mini_ref.fa
+##assembly=GRCh38
+##GATKCommandLine.HaplotypeCaller=<ID=HaplotypeCaller,Version=4.4.0.0>
+##contig=<ID=chr1,length=2000>
+##ALT=<ID=NON_REF,Description="Represents any possible alternative allele">
+##INFO=<ID=END,Number=1,Type=Integer,Description="Stop position of the interval">
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Depth">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="GQ">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="DP">
+##FORMAT=<ID=MIN_DP,Number=1,Type=Integer,Description="Min DP">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chr1	1	.	A	<NON_REF>	.	.	END=99;DP=30	GT:GQ:DP:MIN_DP	0/0:40:30:25
+chr1	100	.	T	A,<NON_REF>	100	PASS	DP=40	GT:GQ:DP	0/1:99:40
+chr1	101	.	A	<NON_REF>	.	.	END=200;DP=28	GT:GQ:DP:MIN_DP	0/0:50:28:20

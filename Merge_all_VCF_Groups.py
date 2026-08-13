@@ -1,67 +1,66 @@
 # Merge_all_VCF_Groups.py
 #
-# Batch-merge per-caller VCF files for all patients in a directory.
-# Files are grouped by patient ID — the part of the filename before the first dot.
-#
-# Example layout:
-#   PATIENT_01.FB.vcf  ──┐
-#   PATIENT_01.HC.vcf  ──┤──► PATIENT_01.Merged.vcf
-#   PATIENT_01.DV.vcf  ──┘
-#
-# Groups with 2 or fewer files are skipped (a patient must have output from
-# at least 3 callers to be processed).
-#
-# Priority order (highest to lowest): MU > FB > HC > ST > DV
+# Legacy batch wrapper around vcf_merger.harmonize_vcfs.
+# Groups files by the filename prefix before the first dot.
+# The old "require >2 callers" gate has been removed.
 #
 # Usage:
-#   python Merge_all_VCF_Groups.py <input_directory> <output_directory>
-#
-# Example:
-#   python Merge_all_VCF_Groups.py /data/sarek_output /data/merged_vcfs
-#
-# See vcf_utils.py for full merge strategy documentation.
+#   python Merge_all_VCF_Groups.py <input_directory> <output_directory> <reference.fasta>
 
-import os
+from __future__ import annotations
+
 import argparse
+import os
+import warnings
 from glob import glob
 
-from vcf_utils import merge_vcfs
+from vcf_merger.harmonizer import harmonize_vcfs
+
+warnings.warn(
+    "Merge_all_VCF_Groups.py is deprecated; use the vcf-merger CLI. See docs/migration.md.",
+    DeprecationWarning,
+    stacklevel=1,
+)
 
 
 def find_vcf_groups(directory: str) -> dict[str, list[str]]:
-    """Group VCF files by patient ID (filename prefix before the first dot)."""
-    vcf_files = glob(os.path.join(directory, '*.vcf'))
+    patterns = ["*.vcf", "*.vcf.gz"]
+    vcf_files: list[str] = []
+    for pat in patterns:
+        vcf_files.extend(glob(os.path.join(directory, pat)))
+    # Skip secondary gVCF naming in default discovery by leaving them to validation
     vcf_groups: dict[str, list[str]] = {}
-
     for vcf in vcf_files:
         base_name = os.path.basename(vcf)
-        group_key = base_name.split('.')[0]
-        if group_key not in vcf_groups:
-            vcf_groups[group_key] = []
-        vcf_groups[group_key].append(vcf)
-
+        if ".g.vcf" in base_name.lower():
+            continue
+        group_key = base_name.split(".")[0]
+        vcf_groups.setdefault(group_key, []).append(vcf)
     return vcf_groups
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description='Batch-merge VCF files by patient group from an nf-core/sarek run.'
+        description="Batch-harmonize per-caller VCF files grouped by sample ID prefix."
     )
-    parser.add_argument('directory', type=str, help='Directory containing input VCF files')
-    parser.add_argument('output_dir', type=str, help='Directory to save merged VCF files')
+    parser.add_argument("directory", type=str, help="Directory containing input VCF files")
+    parser.add_argument("output_dir", type=str, help="Directory for harmonized outputs")
+    parser.add_argument("reference", type=str, help="Reference FASTA for normalization")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
-
     vcf_groups = find_vcf_groups(args.directory)
 
     for group, files in vcf_groups.items():
-        if len(files) > 2:
-            output_file = os.path.join(args.output_dir, f"{group}.Merged.vcf")
-            merge_vcfs(files, output_file)
-            print(f"Merged VCF saved: {output_file}")
-        else:
-            print(
-                f"Skipping '{group}': only {len(files)} VCF file(s) found "
-                f"(expected more than 2)."
-            )
+        if len(files) < 1:
+            continue
+        output_file = os.path.join(args.output_dir, f"{group}.harmonized.vcf.gz")
+        result = harmonize_vcfs(
+            files,
+            output_file,
+            reference=args.reference,
+            mode="germline",
+            strategy="union",
+            command_line=["Merge_all_VCF_Groups.py", args.directory, args.output_dir, args.reference],
+        )
+        print(f"Merged VCF saved: {result['paths']['vcf']}")
