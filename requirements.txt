@@ -1,1 +1,0 @@
-pandas>=1.5.0  # optional; only for reports extras. Core dependency is pysam (see pyproject.toml).
