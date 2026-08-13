@@ -49,6 +49,24 @@ VM_INFO_DEFINITIONS = [
         "type": "String",
         "description": "Original unnormalized representation chrom:pos:ref>alt from a supporting caller",
     },
+    {
+        "id": "VM_TUMOR_AF",
+        "number": "1",
+        "type": "Float",
+        "description": "Representative tumor allele fraction from supporting somatic callers (technical; not clinical tier)",
+    },
+    {
+        "id": "VM_NORMAL_AF",
+        "number": "1",
+        "type": "Float",
+        "description": "Representative matched-normal allele fraction when available (technical)",
+    },
+    {
+        "id": "VM_SOMATIC_PAIR",
+        "number": "1",
+        "type": "String",
+        "description": "Somatic sample roles as tumor[:normal] used for this run",
+    },
 ]
 
 

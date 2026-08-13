@@ -29,3 +29,11 @@ Prefer:
 ```bash
 vcf-merger merge --mode germline --reference REF.fa -i a.vcf -i b.vcf -o out.vcf.gz
 ```
+
+Somatic (new in the library refactor):
+
+```bash
+vcf-merger merge --mode somatic --reference REF.fa \
+  --tumor-sample TUMOR --normal-sample NORMAL \
+  -i mutect2.vcf.gz -i strelka.vcf.gz -o out.somatic.vcf.gz
+```

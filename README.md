@@ -151,7 +151,31 @@ Absence from another caller is **not** interpreted as homozygous reference unles
 ## Germline vs somatic
 
 - `--mode germline` — genotype comparison, allele balance, depth, GQ, phasing-friendly fields; no ACMG classification.
-- `--mode somatic` — tumor/normal (or tumor-only) roles via `--tumor-sample` / `--normal-sample`; preserves Mutect2/Strelka metrics natively rather than forcing a universal QUAL.
+- `--mode somatic` — tumor/normal or tumor-only roles; preserves Mutect2/Strelka metrics natively rather than forcing a universal QUAL.
+
+Somatic CLI:
+
+```bash
+# Matched tumor/normal
+vcf-merger merge --mode somatic --reference GRCh38.fa \
+  --tumor-sample TUMOR --normal-sample NORMAL \
+  -i mutect2.vcf.gz -i strelka.vcf.gz -o sample.somatic.harmonized.vcf.gz
+
+# Tumor-only
+vcf-merger merge --mode somatic --reference GRCh38.fa \
+  --tumor-sample TUMOR --tumor-only \
+  -i mutect2.vcf.gz -o sample.tumor_only.harmonized.vcf.gz
+```
+
+Somatic INFO extras (technical only):
+
+| Field | Meaning |
+|-------|---------|
+| `VM_SOMATIC_PAIR` | `tumor` or `tumor:normal` roles used |
+| `VM_TUMOR_AF` | Representative tumor allele fraction |
+| `VM_NORMAL_AF` | Representative normal allele fraction when available |
+
+No AMP/ASCO/CAP clinical tier classification is performed.
 
 Do not mix germline and somatic semantics in one run.
 
@@ -167,7 +191,13 @@ HaplotypeCaller gVCFs (`<NON_REF>`, `END` reference blocks) are intermediate ref
 
 ## WES / WGS suitability
 
-The harmonizer uses a multi-way merge over per-caller streams (contig-dictionary ordered when indexed). It does **not** load all callers into a single pandas DataFrame. Practical for WES/WGS multi-caller single-sample (or matched tumor/normal) callsets. Sort/index inputs when possible.
+The harmonizer:
+
+1. Normalizes each caller to a temporary bgzipped+indexed VCF (when `--reference` is set)
+2. Streams a **multi-way merge** ordered by the reference/VCF contig dictionary
+3. Writes the harmonized VCF and evidence JSONL **incrementally** (no full multi-caller DataFrame)
+
+Peak memory is intended to stay near one contig × N callers of evidence objects, not the cartesian product of entire WGS callsets. Prefer `.vcf.gz` + tabix inputs when skipping normalization.
 
 ## Structural variants / CNVs
 

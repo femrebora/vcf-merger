@@ -55,6 +55,8 @@ def test_merge_throughput_three_callers(tmp_path: Path):
     assert rps > 100
     # Document memory delta (Linux ru_maxrss is KB)
     mem_delta_kb = max(0, rss_after - rss_before)
+    # Streaming write should not explode memory for 5k × 3 callers
+    assert mem_delta_kb < 500_000  # < ~500 MB RSS delta
     (tmp_path / "perf.txt").write_text(
         f"records={n} callers=3 seconds={elapsed:.3f} rps={rps:.1f} maxrss_delta_kb={mem_delta_kb}\n"
     )

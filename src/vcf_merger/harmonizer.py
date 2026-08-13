@@ -5,16 +5,14 @@ from __future__ import annotations
 import heapq
 import logging
 import os
-import tempfile
-from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 import pysam
 
-from vcf_merger.callers import detect_caller, get_adapter, short_label
+from vcf_merger.callers import get_adapter
 from vcf_merger.callers.base import CallerAdapter
 from vcf_merger.canonical import is_supported_small_variant, make_canonical
 from vcf_merger.exceptions import ValidationError
@@ -23,15 +21,15 @@ from vcf_merger.io_vcf import open_variant_file
 from vcf_merger.models import (
     AnalysisMode,
     CallerEvidence,
-    CanonicalVariant,
     EnsembleStrategy,
     HarmonizedVariant,
     InputVCFMetadata,
 )
 from vcf_merger.normalization import normalize_to_temp
-from vcf_merger.provenance import build_provenance
+from vcf_merger.provenance import build_provenance, write_provenance
+from vcf_merger.somatic import SomaticContext, resolve_somatic_context
 from vcf_merger.validation import validate_input_set
-from vcf_merger.writers import write_outputs
+from vcf_merger.writers import StreamingHarmonizedWriter
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +52,6 @@ class _SiteEvent:
 def _normalize_gt(gt: Optional[str]) -> Optional[str]:
     if gt is None:
         return None
-    # Treat 0|1 and 0/1 as comparable by unphased allele multiset for conflict detection
     sep = "|" if "|" in gt else "/"
     parts = gt.split(sep)
     try:
@@ -68,12 +65,8 @@ def reconcile_genotypes(
     evidence: list[CallerEvidence],
     sample: str,
 ) -> tuple[Optional[str], bool]:
-    """Return (representative_gt, conflict).
-
-    Unanimous genotypes (ignoring phase) win; otherwise flag conflict and
-    return a deterministic representative (first PASS, else first) genotype.
-    """
-    gts: list[tuple[str, bool, Optional[str]]] = []  # raw, passed, caller
+    """Return (representative_gt, conflict)."""
+    gts: list[tuple[str, bool, Optional[str]]] = []
     for e in evidence:
         for s in e.samples:
             if s.sample == sample and s.genotype:
@@ -84,7 +77,6 @@ def reconcile_genotypes(
     norms = {_normalize_gt(g) for g, _, _ in gts}
     norms.discard(None)
     if len(norms) <= 1:
-        # Prefer a PASS genotype's raw representation
         for raw, passed, _ in gts:
             if passed:
                 return raw, False
@@ -128,9 +120,10 @@ def _extract_from_record(
     source_file: str,
     caller_version: Optional[str],
     detection_source,
-    assembly: str,
     contig_index: dict[str, int],
     source_idx: int,
+    tumor_sample: Optional[str] = None,
+    normal_sample: Optional[str] = None,
 ) -> Iterator[_SiteEvent]:
     alts = record.alts or ()
     if not alts:
@@ -143,9 +136,11 @@ def _extract_from_record(
             source_file=source_file,
             caller_version=caller_version,
             detection_source=detection_source,
+            tumor_sample=tumor_sample,
+            normal_sample=normal_sample,
         )
         contig = str(record.contig)
-        cidx = contig_index.get(contig, 10_000 + hash(contig) % 1000)
+        cidx = contig_index.get(contig, 10_000 + abs(hash(contig)) % 1000)
         yield _SiteEvent(
             contig_idx=cidx,
             pos=int(record.pos),
@@ -158,75 +153,67 @@ def _extract_from_record(
         )
 
 
+def _is_indexed(path: str) -> bool:
+    return (
+        os.path.exists(path + ".tbi")
+        or os.path.exists(path + ".csi")
+        or path.endswith(".bcf")
+    )
+
+
 def _stream_source_events(
     path: str,
     *,
     adapter: CallerAdapter,
     caller_version: Optional[str],
     detection_source,
-    assembly: str,
     contig_index: dict[str, int],
     source_idx: int,
+    tumor_sample: Optional[str] = None,
+    normal_sample: Optional[str] = None,
 ) -> Iterator[_SiteEvent]:
-    """Yield events in merge-key order.
+    """Yield events in merge-key order, flushing per contig when indexed."""
 
-    Prefer contig-ordered ``fetch`` on indexed files; otherwise materialize and
-    sort one caller stream (bounded by a single callset, not the cartesian product).
-    """
-    events: list[_SiteEvent] = []
+    def _emit(record: pysam.VariantRecord) -> list[_SiteEvent]:
+        return list(
+            _extract_from_record(
+                record,
+                adapter=adapter,
+                source_file=path,
+                caller_version=caller_version,
+                detection_source=detection_source,
+                contig_index=contig_index,
+                source_idx=source_idx,
+                tumor_sample=tumor_sample,
+                normal_sample=normal_sample,
+            )
+        )
+
     with open_variant_file(path) as vf:
-        indexed = getattr(vf, "index", None) is not None
-        if indexed and contig_index:
-            # Iterate contigs in dictionary order for true streaming by contig.
+        if _is_indexed(path) and contig_index:
             for contig, _idx in sorted(contig_index.items(), key=lambda x: x[1]):
+                events: list[_SiteEvent] = []
                 try:
                     iterator = vf.fetch(contig)
                 except ValueError:
                     continue
                 for record in iterator:
-                    events.extend(
-                        list(
-                            _extract_from_record(
-                                record,
-                                adapter=adapter,
-                                source_file=path,
-                                caller_version=caller_version,
-                                detection_source=detection_source,
-                                assembly=assembly,
-                                contig_index=contig_index,
-                                source_idx=source_idx,
-                            )
-                        )
-                    )
-                # Flush per contig to keep memory bounded
+                    events.extend(_emit(record))
                 events.sort(key=lambda e: e.sort_key())
                 yield from events
-                events = []
             return
 
+        # Unindexed: one-caller materialization (still not a multi-caller cartesian join)
+        events = []
         for record in vf:
-            events.extend(
-                list(
-                    _extract_from_record(
-                        record,
-                        adapter=adapter,
-                        source_file=path,
-                        caller_version=caller_version,
-                        detection_source=detection_source,
-                        assembly=assembly,
-                        contig_index=contig_index,
-                        source_idx=source_idx,
-                    )
-                )
-            )
-    events.sort(key=lambda e: e.sort_key())
-    yield from events
+            events.extend(_emit(record))
+        events.sort(key=lambda e: e.sort_key())
+        yield from events
 
 
 def _merge_sorted_events(
     sources: list[Iterator[_SiteEvent]],
 ) -> Iterator[list[_SiteEvent]]:
-    """Multi-way merge of sorted event streams; yield groups of identical alleles."""
     heap: list[tuple[tuple, int, _SiteEvent, Iterator[_SiteEvent]]] = []
     for i, it in enumerate(sources):
         try:
@@ -239,7 +226,7 @@ def _merge_sorted_events(
     group: list[_SiteEvent] = []
 
     while heap:
-        key, i, ev, it = heapq.heappop(heap)
+        _key, i, ev, it = heapq.heappop(heap)
         allele_key = (ev.contig_idx, ev.pos, ev.ref, ev.alt)
         if current_key is None:
             current_key = allele_key
@@ -271,11 +258,12 @@ def harmonize_variant_group(
 ) -> Optional[HarmonizedVariant]:
     if not events:
         return None
-    # Use first event locus
     e0 = events[0]
-    chrom = e0.evidence.original_chrom or _contig_from_evidence(e0)
+    chrom = e0.evidence.original_chrom
     canonical = make_canonical(assembly, chrom, e0.pos, e0.ref, e0.alt)
     evidence = [ev.evidence for ev in events]
+    # Stable evidence order by caller name then source index
+    evidence.sort(key=lambda e: (e.caller, e.source_file))
     unsupported = any(ev.unsupported for ev in events)
     reason = next((ev.unsupported_reason for ev in events if ev.unsupported), None)
 
@@ -305,12 +293,7 @@ def harmonize_variant_group(
     )
 
 
-def _contig_from_evidence(ev: _SiteEvent) -> str:
-    return ev.evidence.original_chrom or ""
-
-
 def _build_contig_index(metas: list[InputVCFMetadata], reference: Optional[str]) -> dict[str, int]:
-    """Contig order from reference dictionary when available, else first VCF header."""
     order: list[str] = []
     if reference and os.path.exists(reference + ".fai"):
         with open(reference + ".fai", encoding="utf-8") as fh:
@@ -322,7 +305,6 @@ def _build_contig_index(metas: list[InputVCFMetadata], reference: Optional[str])
         for c in metas[0].contigs:
             if c.name not in order:
                 order.append(c.name)
-    # include any extra contigs from other inputs
     for m in metas:
         for c in m.contigs:
             if c.name not in order:
@@ -344,11 +326,18 @@ def harmonize_vcfs(
     callers: Optional[list[Optional[str]]] = None,
     tumor_sample: Optional[str] = None,
     normal_sample: Optional[str] = None,
+    tumor_only: bool = False,
     allow_gvcf: bool = False,
     command_line: Optional[list[str]] = None,
     keep_unsupported_in_sidecar: bool = True,
+    evidence_path: Optional[str | Path] = None,
+    provenance_path: Optional[str | Path] = None,
 ) -> dict[str, Any]:
-    """Harmonize per-caller VCFs into VCF + evidence + provenance outputs."""
+    """Harmonize per-caller VCFs into VCF + evidence + provenance outputs.
+
+    Uses a multi-way merge over per-caller streams and writes incrementally so
+    peak memory stays near one contig × N callers rather than full cartesian joins.
+    """
     mode = AnalysisMode(mode) if not isinstance(mode, AnalysisMode) else mode
     strategy = (
         EnsembleStrategy(strategy) if not isinstance(strategy, EnsembleStrategy) else strategy
@@ -360,7 +349,6 @@ def harmonize_vcfs(
     if callers is not None and len(callers) != len(input_paths):
         raise ValidationError("--caller count must match --input count when provided")
 
-    # Inspect + detect callers
     metas: list[InputVCFMetadata] = []
     for i, path in enumerate(input_paths):
         explicit = callers[i] if callers else None
@@ -381,10 +369,15 @@ def harmonize_vcfs(
         require_identical_samples=True,
     )
 
+    somatic_ctx: Optional[SomaticContext] = None
     if mode == AnalysisMode.SOMATIC:
-        _validate_somatic_samples(metas, tumor_sample=tumor_sample, normal_sample=normal_sample)
+        somatic_ctx = resolve_somatic_context(
+            metas,
+            tumor_sample=tumor_sample,
+            normal_sample=normal_sample,
+            tumor_only=tumor_only,
+        )
 
-    # Normalize each input to temp when requested
     work_paths: list[str] = []
     temp_paths: list[str] = []
     try:
@@ -404,9 +397,11 @@ def harmonize_vcfs(
         for m in metas:
             adapter = get_adapter(m.caller or "unknown")
             if adapter is None:
-                # Unknown caller: use a generic FreeBayes-like passthrough via base subclass
                 adapter = _GenericAdapter(m.caller or "unknown")
             adapters.append(adapter)
+
+        tumor_name = somatic_ctx.tumor_sample if somatic_ctx else None
+        normal_name = somatic_ctx.normal_sample if somatic_ctx else None
 
         sources = [
             _stream_source_events(
@@ -414,48 +409,19 @@ def harmonize_vcfs(
                 adapter=adapters[i],
                 caller_version=metas[i].caller_version,
                 detection_source=metas[i].caller_detection_source,
-                assembly=assembly,
                 contig_index=contig_index,
                 source_idx=i,
+                tumor_sample=tumor_name,
+                normal_sample=normal_name,
             )
             for i in range(len(work_paths))
         ]
 
         samples = list(metas[0].samples)
         primary_sample = samples[0] if samples else "SAMPLE"
-        if mode == AnalysisMode.SOMATIC and tumor_sample:
-            primary_sample = tumor_sample
+        if somatic_ctx is not None:
+            primary_sample = somatic_ctx.tumor_sample
 
-        variants: list[HarmonizedVariant] = []
-        unsupported: list[HarmonizedVariant] = []
-        for group in _merge_sorted_events(sources):
-            # Fix contig name on canonical from evidence
-            for ev in group:
-                if not ev.evidence.original_chrom:
-                    continue
-            hv = harmonize_variant_group(
-                group,
-                assembly=assembly,
-                strategy=strategy,
-                consensus_n=consensus_n,
-                include_callers=include_set,
-                exclude_callers=exclude_set,
-                primary_sample=primary_sample,
-            )
-            if hv is None:
-                continue
-            # Repair contig if empty
-            if not hv.canonical.contig:
-                chrom = group[0].evidence.original_chrom
-                hv.canonical = make_canonical(
-                    assembly, chrom, hv.canonical.pos, hv.canonical.ref, hv.canonical.alt
-                )
-            if hv.unsupported:
-                unsupported.append(hv)
-            else:
-                variants.append(hv)
-
-        # Collect headers from work paths
         input_headers: list[pysam.VariantHeader] = []
         for p in work_paths:
             with open_variant_file(p) as vf:
@@ -471,12 +437,54 @@ def harmonize_vcfs(
         ]
         if ref_s:
             tool_meta.append(f"##vcf_mergerReference={ref_s}")
-        if mode == AnalysisMode.SOMATIC:
-            if tumor_sample:
-                tool_meta.append(f"##vcf_mergerTumorSample={tumor_sample}")
-            if normal_sample:
-                tool_meta.append(f"##vcf_mergerNormalSample={normal_sample}")
+        if somatic_ctx is not None:
+            tool_meta.append(f"##vcf_mergerSomatic={somatic_ctx.describe()}")
+            tool_meta.append(f"##vcf_mergerTumorSample={somatic_ctx.tumor_sample}")
+            if somatic_ctx.normal_sample:
+                tool_meta.append(f"##vcf_mergerNormalSample={somatic_ctx.normal_sample}")
 
+        out_base = str(output)
+        if out_base.endswith(".vcf.gz"):
+            stem = out_base[: -len(".vcf.gz")]
+        elif out_base.endswith(".vcf"):
+            stem = out_base[: -len(".vcf")]
+        else:
+            stem = out_base
+        ev_path = str(evidence_path or f"{stem}.evidence.jsonl")
+        prov_path = str(provenance_path or f"{stem}.provenance.json")
+
+        with StreamingHarmonizedWriter(
+            output,
+            input_headers=input_headers,
+            samples=samples,
+            tool_meta_lines=tool_meta,
+            evidence_path=ev_path,
+            somatic=somatic_ctx,
+        ) as writer:
+            for group in _merge_sorted_events(sources):
+                hv = harmonize_variant_group(
+                    group,
+                    assembly=assembly,
+                    strategy=strategy,
+                    consensus_n=consensus_n,
+                    include_callers=include_set,
+                    exclude_callers=exclude_set,
+                    primary_sample=primary_sample,
+                )
+                if hv is None:
+                    continue
+                if hv.unsupported and not keep_unsupported_in_sidecar:
+                    continue
+                writer.write(hv, to_vcf=not hv.unsupported)
+
+            paths = {
+                "vcf": writer.output_vcf,
+                "evidence": writer.evidence_path,
+            }
+            variant_count = writer.variant_count
+            unsupported_count = writer.unsupported_count
+
+        # close() already indexed; write provenance after stream completes
         prov = build_provenance(
             command_line=command_line or [],
             analysis_mode=mode.value,
@@ -489,31 +497,46 @@ def harmonize_vcfs(
             },
             input_metas=metas,
             samples=samples,
+            notes=[
+                "Technical VCF harmonization only; not ACMG/AMP classification.",
+                "Caller concordance is not clinical evidence strength.",
+            ]
+            + (
+                [
+                    f"Somatic context: {somatic_ctx.describe()}",
+                    "No AMP/ASCO/CAP clinical tier classification is performed.",
+                ]
+                if somatic_ctx
+                else []
+            ),
         )
-
-        all_for_sidecar = variants + (unsupported if keep_unsupported_in_sidecar else [])
-        paths = write_outputs(
-            output_vcf=output,
-            variants=variants,
-            input_headers=input_headers,
-            samples=samples,
-            provenance=prov,
-            tool_meta_lines=tool_meta,
-        )
-        # Rewrite evidence sidecar to include unsupported if requested
-        if keep_unsupported_in_sidecar and unsupported:
-            from vcf_merger.writers import write_evidence_jsonl
-
-            write_evidence_jsonl(paths["evidence"], all_for_sidecar)
+        if somatic_ctx is not None:
+            # Attach somatic roles into provenance inputs notes via normalization blob
+            prov.normalization["somatic"] = {
+                "tumor_sample": somatic_ctx.tumor_sample,
+                "normal_sample": somatic_ctx.normal_sample,
+                "tumor_only": somatic_ctx.tumor_only,
+            }
+        write_provenance(prov_path, prov)
+        paths["provenance"] = prov_path
 
         return {
             "paths": paths,
-            "variant_count": len(variants),
-            "unsupported_count": len(unsupported),
+            "variant_count": variant_count,
+            "unsupported_count": unsupported_count,
             "assembly": assembly,
             "samples": samples,
             "mode": mode.value,
             "strategy": strategy.value,
+            "somatic": (
+                {
+                    "tumor_sample": somatic_ctx.tumor_sample,
+                    "normal_sample": somatic_ctx.normal_sample,
+                    "tumor_only": somatic_ctx.tumor_only,
+                }
+                if somatic_ctx
+                else None
+            ),
         }
     finally:
         for tmp in temp_paths:
@@ -524,29 +547,6 @@ def harmonize_vcfs(
                         os.unlink(p)
                     except OSError:
                         pass
-
-
-def _validate_somatic_samples(
-    metas: list[InputVCFMetadata],
-    *,
-    tumor_sample: Optional[str],
-    normal_sample: Optional[str],
-) -> None:
-    all_samples = set()
-    for m in metas:
-        all_samples.update(m.samples)
-    if tumor_sample and tumor_sample not in all_samples:
-        raise ValidationError(
-            f"--tumor-sample '{tumor_sample}' not found in inputs; available: {sorted(all_samples)}"
-        )
-    if normal_sample and normal_sample not in all_samples:
-        raise ValidationError(
-            f"--normal-sample '{normal_sample}' not found in inputs; available: {sorted(all_samples)}"
-        )
-    if not tumor_sample and len(all_samples) > 1:
-        logger.warning(
-            "Somatic mode without --tumor-sample; using first sample as representative."
-        )
 
 
 class _GenericAdapter(CallerAdapter):

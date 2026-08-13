@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import pysam
 
+from vcf_merger.af_utils import af_from_ad, strelka_snv_af
 from vcf_merger.callers.base import CallerAdapter, _as_float, _find_version, _header_text
 
 
@@ -37,6 +38,40 @@ class StrelkaAdapter(CallerAdapter):
                 metrics[key] = record.info[key]
         return metrics
 
-    def tumor_af(self, record: pysam.VariantRecord, alt_index: int) -> Optional[float]:
-        # Strelka often encodes tier counts in FORMAT AU/CU/GU/TU etc.
+    def _af_for_sample(
+        self,
+        record: pysam.VariantRecord,
+        alt_index: int,
+        sample_fmts: Optional[dict[str, dict[str, Any]]],
+        sample: Optional[str],
+    ) -> Optional[float]:
+        if not sample_fmts or not sample or sample not in sample_fmts:
+            return None
+        fmt = sample_fmts[sample]
+        alt = (record.alts or (".",))[alt_index]
+        af = af_from_ad(fmt, alt_index)
+        if af is not None:
+            return af
+        if isinstance(alt, str) and len(alt) == 1:
+            return strelka_snv_af(fmt, alt)
         return None
+
+    def tumor_af(
+        self,
+        record: pysam.VariantRecord,
+        alt_index: int,
+        *,
+        sample_fmts: Optional[dict[str, dict[str, Any]]] = None,
+        tumor_sample: Optional[str] = None,
+    ) -> Optional[float]:
+        return self._af_for_sample(record, alt_index, sample_fmts, tumor_sample)
+
+    def normal_af(
+        self,
+        record: pysam.VariantRecord,
+        alt_index: int,
+        *,
+        sample_fmts: Optional[dict[str, dict[str, Any]]] = None,
+        normal_sample: Optional[str] = None,
+    ) -> Optional[float]:
+        return self._af_for_sample(record, alt_index, sample_fmts, normal_sample)
