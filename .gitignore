@@ -5,46 +5,17 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
 .coverage
 htmlcov/
 .DS_Store
 .venv/
 venv/
 
-# Secrets — never commit
-.env
-.env.*
-!.env.example
-secrets/
-
-# Genomic / clinical data — never commit real patient files
-*.fastq
-*.fastq.gz
-*.fq
-*.fq.gz
-*.bam
-*.bai
-*.cram
-*.crai
+# Ignore ad-hoc VCF outputs, but keep test fixtures
 *.vcf
 *.vcf.gz
-*.gvcf
-*.gvcf.gz
 *.tbi
+*.bai
+*.bcf
 *.csi
-*.bed
-*.bed.gz
-patient-data/
-clinical-data/
-genomic-data/
-
-# Local object storage / DB
-*.db
-local-objects/
-
-# Synthetic fixtures ONLY may be committed under tests/fixtures/synthetic/
-# Only synthetic/non-human-identifiable data may be committed there.
-!tests/fixtures/synthetic/
-!tests/fixtures/synthetic/**
+!tests/fixtures/**

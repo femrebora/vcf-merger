@@ -1,0 +1,15 @@
+##fileformat=VCFv4.2
+##reference=mini_ref.fa
+##assembly=GRCh38
+##GATKCommandLine.Mutect2=<ID=Mutect2,Version=4.4.0.0>
+##contig=<ID=chr1,length=2000>
+##INFO=<ID=TLOD,Number=A,Type=Float,Description="Tumor LOD">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele fraction">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="AD">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="DP">
+##FORMAT=<ID=AF,Number=A,Type=Float,Description="AF">
+##FILTER=<ID=PASS,Description="All filters passed">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TUMOR
+chr1	100	.	T	A	.	PASS	TLOD=9.5;AF=0.25	GT:AD:DP:AF	0/1:30,10:40:0.25
+chr1	200	.	T	C	.	PASS	TLOD=7.0;AF=0.1	GT:AD:DP:AF	0/1:45,5:50:0.1
